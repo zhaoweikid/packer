@@ -27,35 +27,6 @@ def md5str(s):
     return m.hexdigest()
 
 
-def get_files(fromdir, todir):
-    allfiles = {'html':[], 'js':[], 'css':[], 'sass':[], 'image':[]}
-
-    for root,dirs,files in os.walk(fromdir):
-        for fn in files:
-            key = ''
-            if fn.endswith(('.html', '.js', '.css')):
-                key = fn.split('.')[-1]
-            elif fn.endswith(('.sass', '.scss')):
-                key = 'sass'
-            elif fn.endswith(('.jpg', '.jpeg', '.png', '.gif', '.ico')):
-                key = 'image'
-
-            if not key:
-                continue
-                
-            fpath = os.path.join(root, fn)
-
-            if fpath.startswith(todir):
-                continue
-
-            allfiles[key].append(fpath)
-
-    print 'found files:'
-    pprint.pprint(allfiles)
-    print
-
-    return allfiles
-
 
 def copy_file(frompath, topath, filemd5=True):
     dirname = os.path.dirname(topath)
@@ -95,68 +66,130 @@ def html_replace(out, tofiles, tpl='css'):
 
     return out
 
-def main():
-    fromdir = os.path.abspath(sys.argv[1])
-    todir   = os.path.abspath(sys.argv[2])
+
+class Packer:
+    def get_files(self):
+        allfiles = {'html':[], 'js':[], 'css':[], 'sass':[], 'image':[]}
+
+        for root,dirs,files in os.walk(self.fromdir):
+            for fn in files:
+                key = ''
+                if fn.endswith(('.html', '.js', '.css')):
+                    key = fn.split('.')[-1]
+                elif fn.endswith(('.sass', '.scss')):
+                    key = 'sass'
+                elif fn.endswith(('.jpg', '.jpeg', '.png', '.gif', '.ico')):
+                    key = 'image'
+
+                if not key:
+                    continue
+                    
+                fpath = os.path.join(root, fn)
+
+                if fpath.startswith(self.todir):
+                    continue
+
+                allfiles[key].append(fpath)
+
+        print 'found files:'
+        pprint.pprint(allfiles)
+        print
+
+        return allfiles
 
 
-    files = get_files(fromdir, todir)
 
-    # apply sass to css
-    for fn in files['sass']:
-        topath = os.path.join(todir, fn[len(fromdir)+1:])
-        topath = topath[:-4] + 'css'
-        #print topath
-        
-        dirname = os.path.dirname(topath)
-        if not os.path.isdir(dirname):
-            os.makedirs(dirname)
-   
-        cmd = "sass %s %s" % (fn, topath)
-        run(cmd) 
+    def apply_sass(self):
+        # apply sass to css
+        for fn in self.files['sass']:
+            topath = os.path.join(self.todir, fn[len(self.fromdir)+1:])
+            topath = topath[:-4] + 'css'
+            #print topath
+            
+            dirname = os.path.dirname(topath)
+            if not os.path.isdir(dirname):
+                os.makedirs(dirname)
        
-        val = md5sum(topath)
+            cmd = "sass %s %s" % (fn, topath)
+            run(cmd) 
+           
+            val = md5sum(topath)
 
-        topath2 = topath[:-4] + ".%s.css" % (val[-8:])
-        print 'copy:', topath2
-        os.rename(topath, topath2)
-        
-        mapfile = topath + '.map'
-        if os.path.isfile(mapfile):
-            os.rename(mapfile, topath2+'.map')
+            topath2 = topath[:-4] + ".%s.css" % (val[-8:])
+            print 'copy:', topath2
+            os.rename(topath, topath2)
+            
+            mapfile = topath + '.map'
+            if os.path.isfile(mapfile):
+                os.rename(mapfile, topath2+'.map')
 
-    # copy css/js/image
-    tofiles = {}
-    for k in ['css', 'js', 'image']:
-        for fn in files[k]:
-            topath = os.path.join(todir, fn[len(fromdir)+1:])
-            if k == 'image' and topath.endswith('.ico'):
-                copy_file(fn, os.path.join(todir, os.path.basename(fn)), False)
+
+    def apply_file(self, k='js'):
+        # copy css/js/image
+        for fn in self.files[k]:
+            topath = os.path.join(self.todir, fn[len(self.fromdir)+1:])
+            filename, filename2 = copy_file(fn, topath)
+            if k in ('css', 'js'):
+                self.tofiles[k+'/'+filename] = k+'/'+filename2
+
+    def apply_css(self):
+        return self.apply_file('css')
+
+    def apply_js(self):
+        return self.apply_file('js')
+
+    def apply_image(self):
+        # copy image
+        for fn in self.files['image']:
+            topath = os.path.join(self.todir, fn[len(self.fromdir)+1:])
+            if topath.endswith('.ico'):
+                copy_file(fn, os.path.join(self.todir, os.path.basename(fn)), False)
                 continue
 
             filename, filename2 = copy_file(fn, topath)
-            if k in ('css', 'js'):
-                tofiles[k+'/'+filename] = k+'/'+filename2
 
-    # create html
-    for fn in files['html']:
-        out = ''
-        with open(fn) as f:
-            out = f.read() 
-        out = html_replace(out, tofiles, 'css')
-        out = html_replace(out, tofiles, 'js')
 
-        topath = os.path.join(todir, os.path.basename(fn))
-        dirname = os.path.dirname(topath)
-        if not os.path.isdir(dirname):
-            os.makedirs(dirname)
+    def apply_html(self):
+        # create html
+        for fn in self.files['html']:
+            out = ''
+            with open(fn) as f:
+                out = f.read() 
+            out = html_replace(out, self.tofiles, 'css')
+            out = html_replace(out, self.tofiles, 'js')
 
-        with open(topath, 'w+') as f:
-            f.write(out)
-        print 'create:', topath
+            topath = os.path.join(self.todir, os.path.basename(fn))
+            dirname = os.path.dirname(topath)
+            if not os.path.isdir(dirname):
+                os.makedirs(dirname)
+
+            with open(topath, 'w+') as f:
+                f.write(out)
+            print 'create:', topath
+
+
+
+    def __init__(self, fromdir, todir):
+        self.fromdir = fromdir 
+        self.todir   = todir 
+
+        self.files = self.get_files()
+        self.tofiles = {}
+    
+    def run(self):
+        self.apply_sass()
+        self.apply_css()
+        self.apply_js()
+        self.apply_image()
+        self.apply_html()
 
 if __name__ == '__main__':
-    main()
+    fromdir = os.path.abspath(sys.argv[1])
+    todir   = os.path.abspath(sys.argv[2])
+
+    p = Packer(fromdir, todir)
+    p.run()
+
     print 'success!'
 
 
