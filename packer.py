@@ -13,7 +13,8 @@ import getopt
 import threading
 import http
 from http.server import HTTPServer, SimpleHTTPRequestHandler
-
+import urllib
+import posixpath
 
 def run(cmd):
     print(cmd)
@@ -275,7 +276,26 @@ class Packer:
 def webserver(docroot, port):
     #print("webserver:", docroot, port)
     class MyHandler (SimpleHTTPRequestHandler):
-        pass
+        def translate_path(self, path):
+            path = path.split('?',1)[0]
+            path = path.split('#',1)[0]
+            trailing_slash = path.rstrip().endswith('/')
+            try:
+                path = urllib.parse.unquote(path, errors='surrogatepass')
+            except UnicodeDecodeError:
+                path = urllib.parse.unquote(path)
+            path = posixpath.normpath(path)
+            words = path.split('/')
+            words = filter(None, words)
+            path = docroot
+            for word in words:
+                if os.path.dirname(word) or word in (os.curdir, os.pardir):
+                    continue
+                path = os.path.join(path, word)
+            if trailing_slash:
+                path += '/'
+            return path
+
 
     server_address = ('', port)
     httpd = HTTPServer(server_address, MyHandler)
