@@ -25,9 +25,11 @@ def run(cmd):
     return code, data
 
 def md5sum(filename):
+    #print('md5sum:', filename)
     m = hashlib.md5()
-    with open(filename) as f:
-        m.update(f.read())
+    with open(filename, 'rb+') as f:
+        s = f.read()
+        m.update(s)
     return m.hexdigest()
 
 def md5str(s):
@@ -72,16 +74,25 @@ def html_replace(out, tofiles, tpl='css'):
         'css':'<link href="%s" rel="stylesheet">\n'
     }
 
-    ret = re.search('\<\!\-\-%s:([a-zA-Z0-9\/\.\,]+)\-\-\>' % (tpl), out)
-    ret2 = re.search('\<\!\-\-%s\-\-\>' % (tpl), out)
-    if ret:
-        items = ret.groups()[0].split(',')
-        s = ''.join([ outtpl[tpl] % (tofiles[x]) for x in items ])
-        out = out.replace(ret.group(), s)
-    elif ret2:
-        items = [ x for x in tofiles.keys() if x.endswith('.css')]
-        s = ''.join([ outtpl[tpl] % (tofiles[x]) for x in items ])
-        out = out.replace(ret2.group(), s)
+    while True:
+        ret = re.search('\<\!\-\-%s:([a-zA-Z0-9\/\.\,]+)\-\-\>' % (tpl), out)
+        ret2 = re.search('\<\!\-\-%s\-\-\>' % (tpl), out)
+
+        if not ret and not ret2:
+            break
+
+        if ret:
+            items = ret.groups()[0].split(',')
+            try:
+                s = ''.join([ outtpl[tpl] % (tofiles[x]) for x in items ])
+            except Exception as e:
+                print('< Error: not found ', str(e), '>')
+                raise
+            out = out.replace(ret.group(), s)
+        elif ret2:
+            items = [ x for x in tofiles.keys() if x.endswith('.css')]
+            s = ''.join([ outtpl[tpl] % (tofiles[x]) for x in items ])
+            out = out.replace(ret2.group(), s)
 
     return out
 
