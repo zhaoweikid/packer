@@ -314,6 +314,8 @@ def webserver(docroot, port):
     httpd.serve_forever()
 
 def monitor_file(fromdir, todir, port=8000):
+    print('from:', fromdir, 'to:', todir)
+    print('monitor mode')
     t = threading.Thread(target=webserver, args=(todir, port), daemon=True)
     t.start()
 
@@ -349,7 +351,16 @@ def monitor_file(fromdir, todir, port=8000):
     wm = pyinotify.WatchManager()
     notifier = pyinotify.Notifier(wm, handler)
     wm.add_watch(fromdir, mask, rec=True)
-    notifier.loop()
+    #notifier.loop()
+
+    while True:
+        try:
+            notifier.process_events()
+            if notifier.check_events():
+                notifier.read_events()
+        except KeyboardInterrupt:
+            notifier.stop()
+            break
 
 
 def usage():
@@ -365,9 +376,10 @@ def main():
     fromdir = ''
     todir   = ''
     monitor = False
+    port = 8000
 
     try:
-        opts, args = getopt.getopt(sys.argv[1:],"hf:t:m",["from=","to="])
+        opts, args = getopt.getopt(sys.argv[1:],"hf:t:m:",["from=","to="])
     except getopt.GetoptError:
         usage()
         sys.exit(2)
@@ -382,13 +394,20 @@ def main():
             todir = arg
         elif opt == '-m':
             monitor = True
+            port = int(arg)
     
     if not fromdir or not todir:
         usage()
         sys.exit(2)
 
     if monitor:
-        monitor_file(fromdir, todir)
+        try:
+            monitor_file(fromdir, todir, port)
+        except KeyboardInterrupt as e:
+            print('keyboard interrypt, quit')
+            os.kill(os.getpid(), 9)
+        except:
+            raise
     else:
         Packer(fromdir, todir).run()
 
