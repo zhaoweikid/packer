@@ -71,12 +71,13 @@ def copy_file(frompath, topath, filemd5=True):
 def html_replace(out, tofiles, tpl='css'):
     outtpl = {
         'js':'<script type="text/javascript" src="%s"></script>\n',
-        'css':'<link href="%s" rel="stylesheet">\n'
+        'css':'<link href="%s" rel="stylesheet">\n',
+        'html':'%s\n',
     }
 
     while True:
-        ret = re.search('\<\!\-\-%s:([a-zA-Z0-9\/\.\,]+)\-\-\>' % (tpl), out)
-        ret2 = re.search('\<\!\-\-%s\-\-\>' % (tpl), out)
+        ret = re.search('\<\!\-\-[ ]*packer:%s:([a-zA-Z0-9\/\.\,]+)[ ]*\-\-\>' % (tpl), out)
+        ret2 = re.search('\<\!\-\-[ ]*packer:%s[ ]*\-\-\>' % (tpl), out)
 
         if not ret and not ret2:
             break
@@ -95,6 +96,149 @@ def html_replace(out, tofiles, tpl='css'):
             out = out.replace(ret2.group(), s)
 
     return out
+
+
+
+class Html:
+    def __init__(self, files, tofiles):
+        # html源文件路径
+        self.files = files
+        # 目标文件路径
+        self.tofiles = tofiles
+        self.tpl = '\<\!\-\-[ ]*packer:([a-z]+):([a-zA-Z0-9_\,\.]+)[ ]*\-\-\>'
+        
+        # 所有源文件内容
+        self.file_content = {}
+
+        # 入口主html
+        self.file_main = []
+        # html生成顺序
+        self.file_seq = []
+
+        self.scan()
+
+    def scan(self):
+        # 文件包含哪些文件
+        filedeps = {}
+        # 文件被哪些文件包含
+        filedeps_rev = {}
+
+        for fn in self.files:
+            with open(fn) as f:
+                s = f.read()
+                self.file_content[fn] = s
+                basedir = os.path.dirname(fn)
+
+                ret = re.findall(self.tpl, s)
+                print(ret)
+                if ret:
+                    for item in ret:
+                        for x in item[1].split(','): 
+                            if fn not in filedeps:
+                                filedeps[fn] = [os.path.join(basedir, x)]
+                            else:
+                                filedeps[fn].append(os.path.join(basedir, x))
+                else:
+                    filedeps[fn] = []
+
+        print('filedeps:', filedeps)
+
+        for fn in filedeps:
+            filedeps_rev[fn] = []
+            for k,v in filedeps.items():
+                if fn in v:
+                    filedeps_rev[fn].append(k)
+
+        print('filedeps_rev:', filedeps_rev)
+
+        for k,v in filedeps_rev.items():
+            if not v:
+                self.file_main.append(k)
+
+        print('file_main:', self.file_main)
+        
+        tmpfiles = []
+        for k,v in filedeps.items():
+            if not v:
+                tmpfiles.append(k)
+        
+        while tmpfiles:
+            one = tmpfiles.pop(0)
+            self.file_seq.append(one)
+            
+            v = filedeps_rev[one]
+            if v:
+                for x in v:
+                    if x not in tmpfiles:
+                        tmpfiles.append(x)
+        
+        print('file_seq:', self.file_seq)
+
+
+
+    def template(self, filepath):
+        outtpl = {
+            'js':'<script type="text/javascript" src="%s"></script>\n',
+            'css':'<link href="%s" rel="stylesheet">\n',
+            'html':'<!-- %s start -->\n%s\n<!-- %s end -->\n\n',
+        }
+
+        content = self.file_content[filepath]
+        p1 = re.split(self.tpl, content) 
+        p2 = re.findall(self.tpl, content)
+
+        if not p2:
+            return content
+
+            #topath = self.make_topath(filepath)
+            #with open(topath, 'w+') as f:
+            #    f.write(content)
+            #return
+
+        dname = os.path.dirname(filepath)
+        s = ''
+        for i in range(0, len(p2)):
+            s += p1[i]
+            filetype, files = p2[i]
+            if filetype == 'html':
+                for fname in files.split(','):
+                    print("fname:", fname)
+                    fpath = os.path.join(dname, fname)
+                    fs = self.file_content[fpath]
+                    s += outtpl[filetype] % (fname, fs, fname)
+            elif filetype == 'css':
+                pass
+            elif filetype == 'js':
+                pass
+        
+        print("p1:", p1, " p2:", p2, " i:", i)
+        s += p1[i+1]
+        return s
+
+        #topath = self.make_topath(filepath)
+        #with open(topath, 'w+') as f:
+        #    f.write(s)
+
+
+    def make_topath(self, filepath):
+        global config
+        topath = os.path.join(config.dest, os.path.basename(filepath))
+        dirname = os.path.dirname(topath)
+        if not os.path.isdir(dirname):
+            os.makedirs(dirname)
+        
+        return topath
+ 
+
+    def create(self):
+        for fn in self.file_seq:
+            print('create:', fn)
+            content = self.template(fn)
+            if fn in self.file_main:
+                topath = self.make_topath(fn)
+                print('write:', topath)
+                with open(topath, 'w+') as f:
+                    f.write(content)
 
 
 class FileCache:
@@ -148,17 +292,32 @@ class FileCache:
 
 class Packer:
     def get_files(self):
+        filetypes = {
+            'html': ('.html', '.htm'),
+            'js': ('.js',),
+            'css': ('.css',),
+            'sass': ('.sass', '.scss'),
+            'image': ('.jpg', '.jpeg', '.png', '.gif', '.ico'),
+        }
         allfiles = {'html':[], 'js':[], 'css':[], 'sass':[], 'image':[]}
 
         for root,dirs,files in os.walk(self.fromdir):
             for fn in files:
                 key = ''
-                if fn.endswith(('.html', '.js', '.css')):
-                    key = fn.split('.')[-1]
-                elif fn.endswith(('.sass', '.scss')):
-                    key = 'sass'
-                elif fn.endswith(('.jpg', '.jpeg', '.png', '.gif', '.ico')):
-                    key = 'image'
+                #if 'html' in self.config.fileext and fn.endswith(('.html', '.js', '.css')):
+                #    key = fn.split('.')[-1]
+                #elif 'css' in self.config.fileext and fn.endswith('.css'):
+                #    key = 'css'
+                #elif 'css' in self.config.fileext and fn.endswith('.css'):
+                #    key = 'css'
+                #elif 'sass' in self.config.fileext and fn.endswith(('.sass', '.scss')):
+                #    key = 'sass'
+                #elif 'image' in self.config.fileext and fn.endswith(('.jpg', '.jpeg', '.png', '.gif', '.ico')):
+                #    key = 'image'
+
+                for k in self.config.filetype:
+                    if fn.endswith(filetypes[k]):
+                        key = k
 
                 if not key:
                     continue
@@ -216,7 +375,7 @@ class Packer:
             topath = os.path.join(self.todir, fn[len(self.fromdir)+1:])
             filename, filename2 = copy_file(fn, topath)
             if k in ('css', 'js'):
-                self.tofiles[k+'/'+filename] = k+'/'+filename2
+                self.tofiles[os.path.join(k,filename)] = os.path.join(k,filename2)
 
     def apply_css(self):
         return self.apply_file('css')
@@ -263,14 +422,16 @@ class Packer:
 
 
 
-    def __init__(self, fromdir, todir):
-        self.fromdir = fromdir 
-        self.todir   = todir 
+    def __init__(self):
+        global config
+        self.config  = config
+        self.fromdir = config.src
+        self.todir   = config.dest
 
         self.files = self.get_files()
         self.tofiles = {}
 
-        self._cache_file = os.path.join(fromdir, '.fcache')
+        self._cache_file = os.path.join(self.fromdir, '.fcache')
         self._cache = FileCache(self._cache_file)
 
     def run(self):
@@ -278,7 +439,10 @@ class Packer:
         self.apply_css()
         self.apply_js()
         self.apply_image()
-        self.apply_html()
+        #self.apply_html()
+
+        h = Html(self.files['html'], self.tofiles)
+        h.create()
 
         self._cache.dump()
 
@@ -313,7 +477,12 @@ def webserver(docroot, port):
     print('webserver at:', port)
     httpd.serve_forever()
 
-def monitor_file(fromdir, todir, port=8000):
+def monitor_file():
+    global config
+    fromdir = config.src
+    todir = config.dest
+    port = config.port
+
     print('from:', fromdir, 'to:', todir)
     print('monitor mode')
     t = threading.Thread(target=webserver, args=(todir, port), daemon=True)
@@ -341,7 +510,7 @@ def monitor_file(fromdir, todir, port=8000):
 
             print('change:', fpath)
             if action == 'modify':
-                Packer(fromdir, todir).run()
+                Packer().run()
 
 
     handler = EventHandler()
@@ -367,19 +536,42 @@ def usage():
     print('packer.py [options]')
     print('options:')
     print('\t-h help')
-    print('\t-f source directory')
-    print('\t-t destination directory, convert source to here')
+    print('\t-s source directory')
+    print('\t-d destination directory, convert source to here')
     print('\t-m monitor mode. copy to destination directory as soon as file changes')
+    print('\t-f which files can be found. default: html,js,css,sass,image')
+    print('\t-b backend server route. eg: "/uc=127.0.0.1:1200,/api=127.0.0.1:2000"')
+
+
+class Config:
+    def __init__(self, data=None):
+        if data and isinstance(data, dict):
+            self._data = data
+        else:
+            self._data = {}
+
+    def __getattr__(self, key):
+        return self._data.get(key)
+
+    def __getitem__(self, key):
+        return self._data.get(key)
+
+    def __str__(self):
+        return str(sel._data)
 
 
 def main():
-    fromdir = ''
-    todir   = ''
-    monitor = False
-    port = 8000
+    params = {
+        'src': '',
+        'dest': '', 
+        'filetype': 'html,js,css,sass,image'.split(','),
+        'monitor': False,
+        'port': 8000,
+        'mode': 'dev', # dev为开发模式, product为生产模式。生产模式会合并js,css文件
+    }
 
     try:
-        opts, args = getopt.getopt(sys.argv[1:],"hf:t:m:",["from=","to="])
+        opts, args = getopt.getopt(sys.argv[1:],"hs:d:m:f:b:",["src=","dest=","file=","backend="])
     except getopt.GetoptError:
         usage()
         sys.exit(2)
@@ -388,28 +580,37 @@ def main():
         if opt == '-h':
             usage()
             sys.exit(0)
-        elif opt in ('-f', '--from'):
-            fromdir = arg
-        elif opt in ('-t', '--to'):
-            todir = arg
+        elif opt in ('-s', '--src'):
+            params['src'] = arg
+        elif opt in ('-d', '--dest'):
+            params['dest'] = arg
+        elif opt in ('-f', '--file'):
+            params['filetype'] = arg.split(',')
+        elif opt in ('-b', '--backend'):
+            params['backend'] = arg
         elif opt == '-m':
-            monitor = True
-            port = int(arg)
+            params['monitor'] = True
+            params['port'] = int(arg)
     
-    if not fromdir or not todir:
+    if not params['src'] or not params['dest']:
         usage()
         sys.exit(2)
 
-    if monitor:
+    global config
+
+    config = Config(params)
+
+
+    if config.monitor:
         try:
-            monitor_file(fromdir, todir, port)
+            monitor_file()
         except KeyboardInterrupt as e:
             print('keyboard interrypt, quit')
             os.kill(os.getpid(), 9)
         except:
             raise
     else:
-        Packer(fromdir, todir).run()
+        Packer().run()
 
     print('success!')
 
